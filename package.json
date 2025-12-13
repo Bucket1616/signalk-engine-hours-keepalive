@@ -12,9 +12,7 @@
   ],
   "author": "Mike <mike@onanewtack.com>",
   "license": "MIT",
-  "dependencies": {
-    "@canboat/canboatjs": "^0.0.11"
-  },
+  "dependencies": {},
   "signalk": {
     "appIcon": "icon.png",
     "displayName": "Engine Run Hours Keepalive",
