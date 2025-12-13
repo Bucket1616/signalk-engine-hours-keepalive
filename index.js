@@ -1,9 +1,7 @@
-const canboatjs = require('@canboat/canboatjs')
-
 module.exports = function (app) {
   const plugin = {}
-  let unsubscribes = []
   let engines = {}
+  let unsubscribes = []
   let options = {}
 
   plugin.id = 'engine-hours-keepalive'
@@ -15,7 +13,7 @@ module.exports = function (app) {
     properties: {
       startDelaySeconds: { type: 'number', default: 120 },
       transmitIntervalSeconds: { type: 'number', default: 30 },
-      maxEngines: { type: 'number', default: 10 }
+      maxEngines: { type: 'number', default: 2 }
     }
   }
 
@@ -34,6 +32,8 @@ module.exports = function (app) {
   }
 
   return plugin
+
+  /* ---------------- Engine logic ---------------- */
 
   function createEngineState(index) {
     return {
@@ -66,9 +66,7 @@ module.exports = function (app) {
       stopInjection(engine)
     }
 
-    if (engine.timeout) {
-      clearTimeout(engine.timeout)
-    }
+    if (engine.timeout) clearTimeout(engine.timeout)
 
     engine.timeout = setTimeout(() => {
       startInjection(engine)
@@ -76,17 +74,15 @@ module.exports = function (app) {
   }
 
   function startInjection(engine) {
-    if (engine.isInjecting || engine.lastRunHours === null) {
-      return
-    }
+    if (engine.isInjecting || engine.lastRunHours === null) return
 
     engine.isInjecting = true
 
     engine.interval = setInterval(() => {
-      sendRunHours(engine.index, engine.lastRunHours)
+      emitDelta(engine.index, engine.lastRunHours)
     }, options.transmitIntervalSeconds * 1000)
 
-    app.debug('Injecting run hours for engine ' + engine.index)
+    app.debug('Injecting engine hours for engine ' + engine.index)
   }
 
   function stopInjection(engine) {
@@ -98,14 +94,25 @@ module.exports = function (app) {
     engine.isInjecting = false
   }
 
-  function sendRunHours(engineIndex, hours) {
-    const pgn = {
-      pgn: 127489,
-      engineInstance: engineIndex,
-      engineHours: hours
+  function emitDelta(engineIndex, hours) {
+    const delta = {
+      context: 'vessels.self',
+      updates: [
+        {
+          source: {
+            label: 'engine-hours-keepalive'
+          },
+          timestamp: new Date().toISOString(),
+          values: [
+            {
+              path: 'propulsion.engine.' + engineIndex + '.runHours',
+              value: hours
+            }
+          ]
+        }
+      ]
     }
 
-    const msg = canboatjs.pgnToActisenseSerialFormat(pgn)
-    app.emit('nmea2000out', msg)
+    app.handleMessage(plugin.id, delta)
   }
 }
