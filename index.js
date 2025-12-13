@@ -1,88 +1,165 @@
+'use strict'
+
 module.exports = function (app) {
   const plugin = {}
-  let engines = {}
-  let unsubscribes = []
   let options = {}
+  let engines = []
+  let unsubscribes = []
 
-  plugin.id = 'engine-hours-keepalive'
+  plugin.id = 'signalk-engine-hours-keepalive'
   plugin.name = 'Engine Hours Keepalive'
-  plugin.description = 'Repeats last known engine run hours when engines go silent'
+  plugin.description =
+    'Re-emits engine hours when engines stop transmitting so downstream devices retain latest hours.'
 
+  // --------------------
+  // Plugin schema
+  // --------------------
   plugin.schema = {
     type: 'object',
     properties: {
-      startDelaySeconds: { type: 'number', default: 120 },
-      transmitIntervalSeconds: { type: 'number', default: 30 },
-      maxEngines: { type: 'number', default: 2 }
+      startDelaySeconds: {
+        type: 'number',
+        title: 'Silence delay before keepalive starts (seconds)',
+        default: 20
+      },
+      transmitIntervalSeconds: {
+        type: 'number',
+        title: 'Transmit interval (seconds)',
+        default: 3
+      },
+      discoverOnly: {
+        type: 'boolean',
+        title: 'Discovery only (do not inject)',
+        default: false
+      },
+      engines: {
+        type: 'array',
+        title: 'Engines',
+        maxItems: 6,
+        items: {
+          type: 'object',
+          required: ['path'],
+          properties: {
+            name: {
+              type: 'string',
+              title: 'Engine name (optional)'
+            },
+            path: {
+              type: 'string',
+              title: 'Runtime path (Signal K)',
+              description:
+                'Example: propulsion.engine.port.runtime'
+            }
+          }
+        }
+      }
     }
   }
 
+  // --------------------
+  // Startup
+  // --------------------
   plugin.start = function (opts) {
-    options = opts
+    options = opts || {}
 
-    for (let i = 0; i < options.maxEngines; i++) {
-      engines[i] = createEngineState(i)
-      subscribeToEngine(i)
+    const discovered = discoverEngines()
+    publishDiscovery(discovered)
+
+    if (options.discoverOnly) {
+      app.debug('Discovery-only mode enabled; no injection will occur')
+      return
     }
+
+    ;(options.engines || []).forEach(cfg => {
+      const engine = createEngine(cfg)
+      engines.push(engine)
+      subscribe(engine)
+    })
   }
 
+  // --------------------
+  // Shutdown
+  // --------------------
   plugin.stop = function () {
-    unsubscribes.forEach(f => f())
-    Object.values(engines).forEach(stopInjection)
+    engines.forEach(stopInjection)
+    unsubscribes.forEach(fn => fn())
+    engines = []
+    unsubscribes = []
   }
 
-  return plugin
+  // --------------------
+  // Engine object
+  // --------------------
+  function createEngine(config) {
+    const saved = app.getData(`engine.${config.path}`)
+    const unit = detectUnit(config.path)
 
-  /* ---------------- Engine logic ---------------- */
-
-  function createEngineState(index) {
     return {
-      index,
-      lastRunHours: null,
+      config,
+      unit,
+      lastValue: typeof saved === 'number' ? saved : null,
       lastSeen: null,
       isInjecting: false,
       timeout: null,
-      interval: null
+      interval: null,
+      rpmAlive: false
     }
   }
 
-  function subscribeToEngine(index) {
-    const path = 'propulsion.engine.' + index + '.runHours'
+  // --------------------
+  // Subscriptions
+  // --------------------
+  function subscribe(engine) {
+    // Runtime subscription
+    const unsubRuntime = app.streambundle
+      .getSelfStream(engine.config.path)
+      .onValue(value => handleRuntime(engine, value))
 
-    const unsub = app.streambundle
-      .getSelfStream(path)
-      .onValue(value => handleRunHours(index, value))
+    unsubscribes.push(() => unsubRuntime.end(true))
 
-    unsubscribes.push(() => unsub.end(true))
+    // RPM corroboration (best-effort)
+    const rpmPath = engine.config.path
+      .replace(/runtime|runHours$/, 'revolutions')
+
+    const unsubRpm = app.streambundle
+      .getSelfStream(rpmPath)
+      .onValue(rpm => {
+        engine.rpmAlive = typeof rpm === 'number' && rpm > 0
+      })
+
+    unsubscribes.push(() => unsubRpm.end(true))
   }
 
-  function handleRunHours(index, value) {
-    const engine = engines[index]
+  // --------------------
+  // Runtime handler
+  // --------------------
+  function handleRuntime(engine, value) {
+    if (typeof value !== 'number') return
 
-    engine.lastRunHours = value
+    engine.lastValue = value
     engine.lastSeen = Date.now()
+    app.saveData(`engine.${engine.config.path}`, value)
 
-    if (engine.isInjecting) {
-      stopInjection(engine)
-    }
-
-    if (engine.timeout) clearTimeout(engine.timeout)
+    stopInjection(engine)
 
     engine.timeout = setTimeout(() => {
-      startInjection(engine)
+      if (!engine.rpmAlive) startInjection(engine)
     }, options.startDelaySeconds * 1000)
   }
 
+  // --------------------
+  // Injection control
+  // --------------------
   function startInjection(engine) {
-    if (engine.isInjecting || engine.lastRunHours === null) return
+    if (engine.isInjecting || engine.lastValue === null) return
 
     engine.isInjecting = true
+    engine.interval = setInterval(
+      () => emitDelta(engine),
+      options.transmitIntervalSeconds * 1000
+    )
 
-    engine.interval = setInterval(() => {
-      emitDelta(engine.index, engine.lastRunHours)
-    }, options.transmitIntervalSeconds * 1000)
-
-    app.debug('Injecting engine hours for engine ' + engine.index)
+    app.debug(`Injecting runtime for ${engine.config.path}`)
   }
 
   function stopInjection(engine) {
@@ -94,19 +171,20 @@ module.exports = function (app) {
     engine.isInjecting = false
   }
 
-  function emitDelta(engineIndex, hours) {
+  // --------------------
+  // Delta emission
+  // --------------------
+  function emitDelta(engine) {
     const delta = {
       context: 'vessels.self',
       updates: [
         {
-          source: {
-            label: 'engine-hours-keepalive'
-          },
+          source: { label: plugin.id },
           timestamp: new Date().toISOString(),
           values: [
             {
-              path: 'propulsion.engine.' + engineIndex + '.runHours',
-              value: hours
+              path: engine.config.path,
+              value: engine.lastValue
             }
           ]
         }
@@ -115,4 +193,58 @@ module.exports = function (app) {
 
     app.handleMessage(plugin.id, delta)
   }
+
+  // --------------------
+  // Discovery
+  // --------------------
+  function discoverEngines() {
+    const propulsion = app.getSelfPath('propulsion')
+    if (!propulsion || !propulsion.engine) return []
+
+    const results = []
+
+    Object.entries(propulsion.engine).forEach(([key, obj]) => {
+      if (!obj) return
+
+      Object.keys(obj).forEach(field => {
+        if (field === 'runtime' || field === 'runHours') {
+          results.push({
+            path: `propulsion.engine.${key}.${field}`,
+            unit: field === 'runtime' ? 'seconds' : 'hours'
+          })
+        }
+      })
+    })
+
+    return results
+  }
+
+  function publishDiscovery(list) {
+    if (!list.length) return
+
+    const text =
+      'Discovered engine runtime paths:\n' +
+      list.map(e => `• ${e.path} (${e.unit})`).join('\n')
+
+    app.setPluginStatus(text)
+  }
+
+  // --------------------
+  // Unit detection
+  // --------------------
+  function detectUnit(path) {
+    const meta = app.getSelfPath(path + '.meta')
+    if (meta && meta.units) {
+      if (meta.units.includes('s')) return 'seconds'
+      if (meta.units.includes('h')) return 'hours'
+    }
+
+    // Fallback heuristics
+    if (path.endsWith('runtime')) return 'seconds'
+    if (path.endsWith('runHours')) return 'hours'
+
+    return 'seconds'
+  }
+
+  return plugin
 }
