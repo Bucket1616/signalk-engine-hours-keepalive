@@ -1,0 +1,28 @@
+{
+  "name": "signalk-engine-runhours-keepalive",
+  "version": "0.1.0",
+  "description": "Repeats last known engine run hours when engines stop transmitting",
+  "main": "index.js",
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk",
+    "nmea2000",
+    "engine",
+    "hours"
+  ],
+  "author": "Mike <mike@onanewtack.com>",
+  "license": "MIT",
+  "dependencies": {
+    "@canboat/canboatjs": "^0.0.11"
+  },
+  "signalk": {
+    "appIcon": "icon.png",
+    "displayName": "Engine Run Hours Keepalive",
+    "description": "Injects engine run hours when engines go silent",
+    "type": "node-server-plugin"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<your-username>/signalk-engine-runhours-keepalive.git"
+  }
+}
