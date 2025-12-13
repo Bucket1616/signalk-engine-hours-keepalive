@@ -1,5 +1,5 @@
 {
-  "name": "signalk-engine-runhours-keepalive",
+  "name": "signalk-engine-hours-keepalive",
   "version": "0.1.0",
   "description": "Repeats last known engine run hours when engines stop transmitting",
   "main": "index.js",
@@ -15,12 +15,12 @@
   "dependencies": {},
   "signalk": {
     "appIcon": "icon.png",
-    "displayName": "Engine Run Hours Keepalive",
-    "description": "Injects engine run hours when engines go silent",
+    "displayName": "Engine Hours Keepalive",
+    "description": "Injects engine hours when engines go silent",
     "type": "node-server-plugin"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/<your-username>/signalk-engine-runhours-keepalive.git"
+    "url": "https://github.com/<your-username>/signalk-engine-hours-keepalive.git"
   }
 }
