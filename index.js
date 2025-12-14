@@ -17,6 +17,10 @@ module.exports = function (app) {
   plugin.schema = {
     type: 'object',
     properties: {
+      null: {
+        type: 'null',
+        title: 'Configure each engine path and engine hours will be persisted on NMEA even with engines off',
+      },
       startDelaySeconds: {
         type: 'number',
         title: 'Silence delay before keepalive starts (seconds)',
@@ -29,7 +33,7 @@ module.exports = function (app) {
       },
       discoverOnly: {
         type: 'boolean',
-        title: 'Discovery only (do not inject)',
+        title: 'Discovery only - Results Appear on Dashboard (NO KEEPALIVE INJECTION!)',
         default: false
       },
       engines: {
@@ -62,13 +66,13 @@ module.exports = function (app) {
   plugin.start = function (opts) {
     options = opts || {}
 
-    const discovered = discoverEngines()
-    publishDiscovery(discovered)
-
     if (options.discoverOnly) {
-      app.debug('Discovery-only mode enabled; no injection will occur')
+      app.debug('Discovery only mode enabled; no injection will occur')
       return
     }
+
+    const discovered = discoverEngines()
+    publishDiscovery(discovered)
 
     ;(options.engines || []).forEach(cfg => {
       const engine = createEngine(cfg)
