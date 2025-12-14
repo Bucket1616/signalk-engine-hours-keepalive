@@ -33,7 +33,7 @@ module.exports = function (app) {
       },
       discoverOnly: {
         type: 'boolean',
-        title: 'Discovery only - Results Appear on Dashboard (NO KEEPALIVE INJECTION!)',
+        title: 'Discovery only - Results Appear on the Dashboard and Debug Log(NO KEEPALIVE INJECTION!)',
         default: false
       },
       engines: {
@@ -126,7 +126,7 @@ module.exports = function (app) {
       .getSelfStream(engine.config.path)
       .onValue(value => handleRuntime(engine, value))
 
-    unsubscribes.push(() => unsubRuntime.end(true))
+    unsubscribes.push(unsubRuntime)
 
     // RPM corroboration (best-effort)
     const rpmPath = engine.config.path
@@ -138,7 +138,7 @@ module.exports = function (app) {
         engine.rpmAlive = typeof rpm === 'number' && rpm > 0
       })
 
-    unsubscribes.push(() => unsubRpm.end(true))
+    unsubscribes.push(unsubRpm)
   }
 
   // --------------------
@@ -263,7 +263,7 @@ module.exports = function (app) {
     })
     
     results.forEach(e =>
-      app.debug(`Discovered runtime path: ${e.path}`)
+      app.debug(`Engine found: ${e.path} `)
     )
   
       return results
@@ -272,15 +272,15 @@ module.exports = function (app) {
   function publishDiscovery(list) {
     if (!list.length) {
       app.setPluginStatus(
-        'Auto-discovery ran, but no engine runtime paths were found.\n' +
-        'Make sure engines have run and runtime data exists.'
+        'Auto-discovery ran, but no engine runtime paths were found. ' +
+        'Make sure any engines are on.'
       )
       return
     }
   
     const text =
-      'Discovered engine runtime paths:\n' +
-      list.map(e => `• ${e.path} (${e.unit})`).join('\n')
+      'Engine found: ' +
+      list.map(e => `• ${e.path} (${e.unit})`).join(', ')
   
     app.setPluginStatus(text)
   }
