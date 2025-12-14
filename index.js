@@ -29,8 +29,9 @@ module.exports = function (app) {
       },
       discoverOnly: {
         type: 'boolean',
-        title: 'Discovery only - Results Appear on Dashboard (NO KEEPALIVE INJECTION!)',
-        default: false
+        title: 'Discovery Mode (Check this first!)',
+        description: 'If checked: The plugin will populate your settings with found engines but WILL NOT transmit data.',
+        default: true
       },
       keepaliveFields: {
         type: 'array',
@@ -91,62 +92,77 @@ module.exports = function (app) {
     const discovered = discoverEngines()
     
     // --------------------
-    // 2. Determine Configuration (Manual vs Auto)
+    // 2. Auto-Populate Configuration
     // --------------------
-    let configsToMonitor = options.engines || []
-    let isAutoConfig = false
+    // If the user has NO engines configured, and we found some, let's save them!
+    const currentConfig = options.engines || []
+    
+    if (currentConfig.length === 0 && discovered.length > 0) {
+      app.debug(`[${plugin.id}] No manual config found. Found ${discovered.length} engines.`)
+      
+      // Create the new config object
+      const newEngineConfig = discovered.map(d => ({
+        path: d.path,
+        engineSource: '', // Leave empty so user can fill if needed, or default logic applies
+        name: d.path.split('.')[1] || 'Engine' // Try to guess a name like 'port'
+      }))
 
-    // If no manual config exists, try to use discovered engines
-    if (configsToMonitor.length === 0) {
-      if (discovered.length > 0) {
-        app.debug(`[${plugin.id}] No manual config. Auto-configuring from discovery.`)
-        isAutoConfig = true
-        configsToMonitor = discovered.map(d => ({
-          path: d.path,
-          engineSource: '' // Default to loose source matching for auto-config
-        }))
-      }
+      // Update options locally
+      options.engines = newEngineConfig
+
+      app.debug(`[${plugin.id}] Saving discovered engines to plugin configuration...`)
+      
+      // SAVE TO DISK
+      // This will trigger a plugin restart automatically by the server!
+      app.savePluginOptions(options, (err) => {
+        if (err) {
+          app.error(`[${plugin.id}] FAILED to save configuration: ${err.message}`)
+          app.setPluginStatus('Error: Could not save discovered engines to config.')
+        } else {
+          app.debug(`[${plugin.id}] Configuration saved successfully.`)
+          app.setPluginStatus(`SUCCESS: Found ${discovered.length} engines and saved them to your settings. Please refresh the settings page to review them.`)
+        }
+      })
+
+      // We return here. The savePluginOptions will trigger a restart, so we stop execution.
+      return
     }
 
     // --------------------
     // 3. Handle "Discovery Only" Mode
     // --------------------
     if (options.discoverOnly) {
-      let statusMsg = `Discovery Only Mode Active.\n`
+      let statusMsg = `Discovery Mode Active.\n`
       
-      if (configsToMonitor.length === 0) {
-        statusMsg += `State: No engines configured and none found via discovery.`
+      if (currentConfig.length === 0) {
+        statusMsg += `State: No engines configured and none found currently.`
       } else {
-        const mode = isAutoConfig ? "AUTO (Discovered)" : "MANUAL (Settings)"
-        statusMsg += `Config Source: ${mode}.\n`
-        statusMsg += `The following engines WOULD be monitored if this mode was off:\n`
+        statusMsg += `Configuration Loaded: ${currentConfig.length} engines.\n`
+        statusMsg += `Injection is DISABLED. Uncheck 'Discovery Mode' to begin keepalive.\n`
+        statusMsg += `--------------------------------\n`
+        statusMsg += `Monitoring the following paths:\n`
         
-        // Show the user exactly what we found
-        configsToMonitor.forEach(c => {
+        currentConfig.forEach(c => {
           statusMsg += ` • ${c.path} `
-          if(c.engineSource) statusMsg += `(Source required: ${c.engineSource})`
+          if(c.engineSource) statusMsg += `(Source limit: ${c.engineSource})`
           statusMsg += `\n`
         })
       }
       
-      // We publish the detailed status so the user can verify
       app.setPluginStatus(statusMsg)
       app.debug(`[${plugin.id}] ${statusMsg}`)
-      
-      // Stop here - do not create actual engine objects or subscribe
-      return 
+      return // Stop here
     }
 
     // --------------------
     // 4. Validate and Start (Real Mode)
     // --------------------
-    if (configsToMonitor.length === 0) {
+    if (currentConfig.length === 0) {
       app.setPluginStatus('Waiting: No engines configured and none discovered yet.')
       return
     }
 
-    configsToMonitor.forEach(cfg => {
-      // Create the engine object (validates path format internally)
+    currentConfig.forEach(cfg => {
       const engine = createEngine(cfg)
       if (engine) {
         engines.push(engine)
@@ -169,22 +185,19 @@ module.exports = function (app) {
   // Engine object
   // --------------------
   function createEngine(config) {
-    // Validate path and extract ID (e.g. 'port', 'starboard')
-    // Expected format: propulsion.<id>.runTime
     if (!config.path) return null
     
     const parts = config.path.split('.')
-    // Basic validation: must be propulsion.something.something
     if (parts.length < 3 || parts[0] !== 'propulsion') {
       app.debug(`[${plugin.id}] Invalid path format: ${config.path}`)
       return null
     }
 
-    const id = parts[1] // 'port', 'starboard', 'main', etc.
+    const id = parts[1] 
 
     const engine = {
       config,
-      signalkId: id, // <--- CRITICAL for emitDelta
+      signalkId: id,
       basePath: `propulsion.${id}`, 
       lastValue: null,
       lastKnown: {},
@@ -207,11 +220,12 @@ module.exports = function (app) {
   // Subscriptions
   // --------------------
   function subscribe(engine) {
+    app.debug(`[${plugin.id}] Subscribing to engine: ${engine.config.path}`)
+    
     // 1. Runtime Subscription
     const stream = app.streambundle.getSelfStream(engine.config.path)
     
     const unsubRuntime = stream.onValue((value) => {
-      // Get the metadata for the *current* value to check source
       const meta = app.getSelfPath(engine.config.path + '.meta')
       handleRuntime(engine, value, meta)
     })
@@ -231,7 +245,6 @@ module.exports = function (app) {
         default: return
       }
 
-      // We handle these fields differently (forced 0), so we don't need lastKnown values for them
       if (['revolutions', 'oilPressure', 'fuelRate'].includes(field)) return
 
       const fullPath = `${engine.basePath}.${suffix}`
@@ -241,13 +254,9 @@ module.exports = function (app) {
       unsubscribes.push(unsub)
     })
 
-    // -----------------------------------------------------
-    // Cold Start Handling: 
-    // If the engine is OFF when the system boots, we have a value (restored) 
-    // but no stream updates coming in. We must manually trigger the silence timer.
-    // -----------------------------------------------------
+    // Cold Start Check
     if (engine.lastValue !== null && engine.lastValue !== undefined) {
-      app.debug(`[${plugin.id}] Initial value found for ${engine.config.path}. Starting silence timer...`)
+      app.debug(`[${plugin.id}] Initial value found for ${engine.config.path} (${engine.lastValue}). Starting silence timer...`)
       resetSilenceTimer(engine)
     }
   }
@@ -261,21 +270,16 @@ module.exports = function (app) {
     const source = meta?.source
     recordSource(engine, source)
 
-    // Loop prevention: If the update came from THIS plugin, ignore it.
     if (source && source.label === plugin.id) return
-    
-    // Check if real source
     if (!isRealEngineSource(engine, source)) return
 
     engine.lastValue = value
     
-    // If we were injecting, stop immediately because the engine is back
     if (engine.isInjecting) {
       app.debug(`[${plugin.id}] Real data detected for ${engine.config.path}. Stopping Keepalive.`)
       stopInjection(engine)
     }
 
-    // Reset the "Silence Detection" timer
     resetSilenceTimer(engine)
   }
 
@@ -292,7 +296,6 @@ module.exports = function (app) {
     if (engine.isInjecting || engine.lastValue === null) return
     engine.isInjecting = true
     
-    // Send one immediately
     emitDelta(engine)
     
     engine.interval = setInterval(
@@ -312,24 +315,18 @@ module.exports = function (app) {
   }
 
   function emitDelta(engine) {
-    // Prepare fake fields (RPM=0, Pressure=0, Temps=LastKnown)
     const values = []
-
-    // 1. RunTime (The most important one)
     values.push({ path: engine.config.path, value: engine.lastValue })
 
-    // 2. Extra fields
     const fields = options.keepaliveFields || ['revolutions', 'oilPressure', 'fuelRate']
     
     fields.forEach(field => {
       let val = null
       let suffix = ''
 
-      // Force 0 for active properties
       if (field === 'revolutions') { val = 0; suffix = 'revolutions' }
       else if (field === 'oilPressure') { val = 0; suffix = 'oilPressure' }
       else if (field === 'fuelRate') { val = 0; suffix = 'fuel.rate' }
-      // Use last known for passive properties (temps)
       else if (engine.lastKnown[field] !== undefined) {
         val = engine.lastKnown[field]
         if (field === 'oilTemperature') suffix = 'oilTemperature'
@@ -345,7 +342,7 @@ module.exports = function (app) {
       context: 'vessels.self',
       updates: [
         {
-          source: { label: plugin.id }, // Important: Identify as this plugin
+          source: { label: plugin.id }, 
           timestamp: new Date().toISOString(),
           values: values
         }
@@ -374,8 +371,7 @@ module.exports = function (app) {
         const fieldLower = field.toLowerCase()
         if (fieldLower === 'runtime' || fieldLower === 'runhours') {
           const path = `propulsion.${key}.${field}`
-  
-          // Try to get the source from metadata
+          
           let sourceLabel = 'unknown'
           const meta = app.getSelfPath(`${path}.meta`)
           if (meta && meta.source && meta.source.label) {
@@ -388,7 +384,7 @@ module.exports = function (app) {
             source: sourceLabel
           })
   
-          app.debug(`[${plugin.id}] Discovered engine: ${path}, source: ${sourceLabel}`)
+          app.debug(`[${plugin.id}] Discovered engine: ${path} (Source: ${sourceLabel})`)
         }
       })
     })
@@ -405,8 +401,8 @@ module.exports = function (app) {
   }
   
   function isRealEngineSource(engine, source) {
-    if (!source) return true // Assume real if no source info (safer)
-    if (source.label === plugin.id) return false // Ignore self
+    if (!source) return true 
+    if (source.label === plugin.id) return false 
     
     const configured = engine.config.engineSource
     if (!configured) return true
