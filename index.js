@@ -11,9 +11,67 @@ module.exports = function (app) {
   plugin.name = 'Engine Hours Keepalive'
   plugin.description = 'Re-emits engine hours and 0-RPM data when engines stop transmitting.'
 
-  // Schema is fine, left out for brevity in review...
-  plugin.schema = { /* ... keep your existing schema ... */ }
-
+  // --------------------
+  // Plugin schema
+  // --------------------
+  plugin.schema = {
+    type: 'object',
+    properties: {
+      startDelaySeconds: {
+        type: 'number',
+        title: 'Silence delay before keepalive starts (seconds)',
+        default: 6
+      },
+      transmitIntervalSeconds: {
+        type: 'number',
+        title: 'Transmit interval (seconds)',
+        default: 3
+      },
+      discoverOnly: {
+        type: 'boolean',
+        title: 'Discovery only - Results Appear on Dashboard (NO KEEPALIVE INJECTION!)',
+        default: false
+      },
+      keepaliveFields: {
+        type: 'array',
+        title: 'Optional fields to include with engine keepalive PGN',
+        description:
+          'These fields will be faked using 0 or last-known values to ensure N2K PGN emission when engine is off.',
+        items: {
+          type: 'string',
+          enum: ['revolutions', 'oilPressure', 'oilTemperature', 'temperature', 'fuelRate']
+        },
+        default: ['revolutions', 'oilPressure', 'fuelRate']
+      },
+      engines: {
+        type: 'array',
+        title: 'Engines',
+        maxItems: 6,
+        items: {
+          type: 'object',
+          required: ['path'],
+          properties: {
+            name: {
+              type: 'string',
+              title: 'Engine name (optional)'
+            },
+            path: {
+              type: 'string',
+              title: 'Runtime path (Signal K)',
+              description:
+                'Example: propulsion.port.runTime'
+            },
+            engineSource: {
+              type: 'string',
+              title: 'Engine runtime source (label or src)',
+              description:
+                'Only runtime updates from this source indicate a real engine. Leave empty to auto-discover.'
+            }
+          }
+        }
+      }
+    }
+  }
   plugin.start = function (opts) {
     options = opts || {}
     engines = []
@@ -28,7 +86,6 @@ module.exports = function (app) {
     if (options.discoverOnly) return
 
     // 2. Merge Discovery with Config? 
-    // Currently you only use Config. If Config is empty, maybe use Discovered?
     let configsToLoad = options.engines || []
     
     // Fallback: If no config exists, try to use discovered engines
@@ -52,7 +109,6 @@ module.exports = function (app) {
 
   plugin.stop = function () {
     engines.forEach(stopInjection)
-    // FIX: Standard BaconJS unsubscribe is just calling the function
     unsubscribes.forEach(unsub => unsub()) 
     engines = []
     unsubscribes = []
@@ -60,7 +116,6 @@ module.exports = function (app) {
   }
 
   function createEngine(config) {
-    // FIX: Logic to extract the ID (e.g., 'port', 'starboard') from 'propulsion.port.runTime'
     const parts = config.path.split('.')
     if (parts.length < 3 || parts[0] !== 'propulsion') {
       app.debug(`[${plugin.id}] Invalid path format: ${config.path}`)
@@ -72,8 +127,8 @@ module.exports = function (app) {
 
     const engine = {
       config,
-      signalkId: id, // FIX: Added this property
-      basePath: `propulsion.${id}`, // Helper for building other paths
+      signalkId: id,
+      basePath: `propulsion.${id}`,
       lastValue: null,
       lastKnown: {},
       timeout: null,
@@ -94,7 +149,6 @@ module.exports = function (app) {
     // 1. Runtime Subscription
     const stream = app.streambundle.getSelfStream(engine.config.path)
     
-    // FIX: Unsubscribe logic
     const unsubRuntime = stream.onValue((value) => {
       // Get the metadata for the *current* value to check source
       // Note: app.getSelfPath(path + '.meta') is safer than meta arg in some SK versions
