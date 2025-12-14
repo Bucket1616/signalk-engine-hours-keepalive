@@ -73,23 +73,33 @@ module.exports = function (app) {
       }
     }
   }
-
   // --------------------
   // Startup
   // --------------------
   plugin.start = function (opts) {
     options = opts || {}
   
-    if (options.discoverOnly) {
-      app.debug('Discovery only mode enabled; no injection will occur')
-      return
-    }
-  
     // Clear engines array and unsubscribes in case of restart
     engines = []
     unsubscribes = []
   
+    app.debug(`[${plugin.id}] Plugin starting with options: ${JSON.stringify(options)}`)
+  
+    // --------------------
+    // Run discovery first
+    // --------------------
+    const discovered = discoverEngines()
+    publishDiscovery(discovered)
+  
+    // If discovery-only mode, skip keepalive injection
+    if (options.discoverOnly) {
+      app.debug(`[${plugin.id}] Discovery-only mode: skipping keepalive injection`)
+      return
+    }
+  
+    // --------------------
     // Create engine objects and subscribe
+    // --------------------
     (options.engines || []).forEach(cfg => {
       const engine = createEngine(cfg)
       engines.push(engine)
@@ -99,42 +109,19 @@ module.exports = function (app) {
     app.setPluginStatus('Plugin Started - waiting for engines')
   
     // --------------------
-    // Delayed discovery report
+    // Optional delayed discovery log/report
     // --------------------
     discoveryTimer = setTimeout(() => {
-      const discovered = engines
-        .filter(e => e.seenSources.size > 0)
-        .map(e => {
-          const sources = [...e.seenSources.values()]
-            .map(s => `label=${s.label || 'n/a'}, src=${s.src || 'n/a'}`)
-            .join('; ')
-          return {
-            path: e.config.path,
-            sources
-          }
-        })
-  
-      if (discovered.length === 0) {
-        app.setPluginStatus(
-          'Discovery ran, but no runtime updates from engines were seen.\n' +
-          'Ensure engines are running and transmitting runtime.'
-        )
-        return
-      }
-  
-      // Log and update dashboard
-      discovered.forEach(d => {
-        app.debug(`[${plugin.id}] Discovered engine: ${d.path}, sources: ${d.sources}`)
+      const activeEngines = engines.filter(e => e.seenSources.size > 0)
+      activeEngines.forEach(engine => {
+        const sources = [...engine.seenSources.values()]
+          .map(s => `label=${s.label || 'n/a'}, src=${s.src || 'n/a'}`)
+          .join('; ')
+        app.debug(`[${plugin.id}] Discovered engine (delayed report): ${engine.config.path}, sources: ${sources}`)
       })
-  
-      const dashboardText = 'Discovered engine runtime paths:\n' +
-        discovered.map(d => `• ${d.path}, sources: ${d.sources}`).join('\n')
-  
-      app.setPluginStatus(dashboardText)
-  
-    }, 2000) // wait 2 seconds for runtime updates to arrive
+    }, 2000)
   }
-
+  
   // --------------------
   // Shutdown
   // --------------------
@@ -229,6 +216,67 @@ module.exports = function (app) {
 
       unsubscribes.push(() => unsub.unsubscribe?.() || unsub.end?.(true));
     });
+  }
+
+  // --------------------
+  // Discover engines from current propulsion data
+  // --------------------
+  function discoverEngines() {
+    const propulsion = app.getSelfPath('propulsion')
+    if (!propulsion || typeof propulsion !== 'object') {
+      app.debug(`[${plugin.id}] No propulsion data found for discovery`)
+      return []
+    }
+  
+    const results = []
+  
+    Object.entries(propulsion).forEach(([key, obj]) => {
+      if (!obj || typeof obj !== 'object') return
+  
+      Object.entries(obj).forEach(([field, value]) => {
+        const fieldLower = field.toLowerCase()
+        if (fieldLower === 'runtime' || fieldLower === 'runhours') {
+          const path = `propulsion.${key}.${field}`
+  
+          // Try to get the source from metadata
+          let sourceLabel = 'unknown'
+          const meta = app.getSelfPath(`${path}.meta`)
+          if (meta && meta.source && meta.source.label) {
+            sourceLabel = meta.source.label
+          }
+  
+          results.push({
+            path,
+            unit: fieldLower === 'runtime' ? 'seconds' : 'hours',
+            source: sourceLabel
+          })
+  
+          // Log path + source
+          app.debug(`[${plugin.id}] Discovered engine: ${path}, source: ${sourceLabel}`)
+        }
+      })
+    })
+  
+    return results
+  }
+  
+  // --------------------
+  // Update dashboard with discovery results
+  // --------------------
+  function publishDiscovery(list) {
+    if (!list.length) {
+      app.setPluginStatus(
+        'Auto-discovery ran, but no engine runtime paths were found.\n' +
+        'Make sure engines have run and runtime data exists.'
+      )
+      return
+    }
+  
+    const text =
+      'Discovered engine runtime paths:\n' +
+      list.map(e => `• ${e.path} (${e.unit}), source: ${e.source}`).join('\n')
+  
+    app.setPluginStatus(text)
   }
 
   // --------------------
