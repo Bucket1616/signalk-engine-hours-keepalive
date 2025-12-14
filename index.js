@@ -75,6 +75,7 @@ module.exports = function (app) {
       engines.push(engine)
       subscribe(engine)
     })
+  app.setPluginStatus('Plugin Start - Status Tet')
   }
 
   // --------------------
