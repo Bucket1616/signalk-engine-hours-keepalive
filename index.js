@@ -48,7 +48,7 @@ module.exports = function (app) {
               type: 'string',
               title: 'Runtime path (Signal K)',
               description:
-                'Example: propulsion.engine.port.runtime'
+                'Example: propulsion.port.runtime'
             }
           }
         }
@@ -136,14 +136,37 @@ module.exports = function (app) {
   function handleRuntime(engine, value) {
     if (typeof value !== 'number') return
 
+    app.debug(
+      `[${plugin.id}] Runtime received from ${engine.config.path}: ${value}`
+    ) 
+
     engine.lastValue = value
     engine.lastSeen = Date.now()
     app.saveData(`engine.${engine.config.path}`, value)
 
+    if (engine.isInjecting) {
+      app.debug(
+        `[${plugin.id}] Engine resumed transmitting on ${engine.config.path}, stopping keepalive`
+      )
+    }
+    
     stopInjection(engine)
 
     engine.timeout = setTimeout(() => {
-      if (!engine.rpmAlive) startInjection(engine)
+      app.debug(
+        `[${plugin.id}] No runtime seen for ${options.startDelaySeconds}s on ${engine.config.path}`
+      )
+    
+      if (!engine.rpmAlive) {
+        app.debug(
+          `[${plugin.id}] Engine appears stopped, starting keepalive for ${engine.config.path}`
+        )
+        startInjection(engine)
+      } else {
+        app.debug(
+          `[${plugin.id}] RPM still active on ${engine.config.path}, suppressing keepalive`
+        )
+      }
     }, options.startDelaySeconds * 1000)
   }
 
@@ -159,10 +182,17 @@ module.exports = function (app) {
       options.transmitIntervalSeconds * 1000
     )
 
-    app.debug(`Injecting runtime for ${engine.config.path}`)
+    app.debug(
+      `[${plugin.id}] Keepalive started for ${engine.config.path} (interval ${options.transmitIntervalSeconds}s)`
+    )
   }
 
   function stopInjection(engine) {
+    if (engine.isInjecting) {
+      app.debug(
+        `[${plugin.id}] Engine started, keepalive stopped for ${engine.config.path}`
+      )
+    }
     if (engine.interval) clearInterval(engine.interval)
     if (engine.timeout) clearTimeout(engine.timeout)
 
@@ -175,6 +205,10 @@ module.exports = function (app) {
   // Delta emission
   // --------------------
   function emitDelta(engine) {
+    app.debug(
+    `[${plugin.id}] Emitting synthetic runtime delta for ${engine.config.path}: ${engine.lastValue}`
+    )
+    
     const delta = {
       context: 'vessels.self',
       updates: [
@@ -199,33 +233,43 @@ module.exports = function (app) {
   // --------------------
   function discoverEngines() {
     const propulsion = app.getSelfPath('propulsion')
-    if (!propulsion || !propulsion.engine) return []
-
+    if (!propulsion || typeof propulsion !== 'object') return []
+  
     const results = []
-
-    Object.entries(propulsion.engine).forEach(([key, obj]) => {
-      if (!obj) return
-
-      Object.keys(obj).forEach(field => {
+  
+    Object.entries(propulsion).forEach(([key, obj]) => {
+      if (!obj || typeof obj !== 'object') return
+  
+      Object.entries(obj).forEach(([field, value]) => {
         if (field === 'runtime' || field === 'runHours') {
           results.push({
-            path: `propulsion.engine.${key}.${field}`,
+            path: `propulsion.${key}.${field}`,
             unit: field === 'runtime' ? 'seconds' : 'hours'
           })
         }
       })
     })
-
-    return results
-  }
+    
+    results.forEach(e =>
+      app.debug(`Discovered runtime path: ${e.path}`)
+    )
+  
+      return results
+    }
 
   function publishDiscovery(list) {
-    if (!list.length) return
-
+    if (!list.length) {
+      app.setPluginStatus(
+        'Auto-discovery ran, but no engine runtime paths were found.\n' +
+        'Make sure engines have run and runtime data exists.'
+      )
+      return
+    }
+  
     const text =
       'Discovered engine runtime paths:\n' +
       list.map(e => `• ${e.path} (${e.unit})`).join('\n')
-
+  
     app.setPluginStatus(text)
   }
 
