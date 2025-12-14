@@ -95,27 +95,30 @@ module.exports = function (app) {
   // --------------------
   // Engine object
   // --------------------
-  function createEngine(config) {
-    const saved = app.getPluginData(`engine.${config.path}`)
-    if (typeof saved === 'number') {
-      engine.lastValue = saved
-      app.debug(
-        `[${plugin.id}] Restored saved runtime for ${config.path}: ${saved}`
-      )
+    function createEngine(config) {
+      const engine = {
+        config,
+        lastValue: null,
+        timeout: null,
+        interval: null,
+        isInjecting: false,
+        rpmAlive: false
+      }
+  
+      // restore persisted value
+      const restored = app.getSelfPath(config.path)
+      if (typeof restored === 'number') {
+        engine.lastValue = restored
+        app.debug(
+          `[${plugin.id}] Restored runtime from model for ${config.path}: ${restored}`
+        )
+      }
+    
+      subscribeRuntime(engine)
+      subscribeRPM(engine)
+    
+      return engine
     }
-    const unit = detectUnit(config.path)
-
-    return {
-      config,
-      unit,
-      lastValue: typeof saved === 'number' ? saved : null,
-      lastSeen: null,
-      isInjecting: false,
-      timeout: null,
-      interval: null,
-      rpmAlive: false
-    }
-  }
 
   // --------------------
   // Subscriptions
@@ -147,13 +150,12 @@ module.exports = function (app) {
   function handleRuntime(engine, value) {
     if (typeof value !== 'number') return
 
+    engine.lastValue = value
+    engine.lastSeen = Date.now()
+
     app.debug(
       `[${plugin.id}] Runtime received from ${engine.config.path}: ${value}`
     ) 
-
-    engine.lastValue = value
-    engine.lastSeen = Date.now()
-    app.savePluginData(`engine.${engine.config.path}`, value)
 
     if (engine.isInjecting) {
       app.setPluginStatus('Engine active: ${engine.config.path}')
