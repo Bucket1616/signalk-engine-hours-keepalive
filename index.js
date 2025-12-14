@@ -355,42 +355,85 @@ module.exports = function (app) {
   // --------------------
   // Helpers
   // --------------------
+  // --------------------
+  // Discover engines using the Full Tree (to get Source info)
+  // --------------------
   function discoverEngines() {
-    const propulsion = app.getSelfPath('propulsion')
-    if (!propulsion || typeof propulsion !== 'object') {
-      app.debug(`[${plugin.id}] No propulsion data found for discovery`)
+    const results = []
+
+    // 1. Try to access the Full Tree (app.signalk.self)
+    // This allows us to see the 'source' property which app.getSelfPath hides.
+    let rootPropulsion = null
+    let isFullTree = false
+
+    if (app.signalk && app.signalk.self && app.signalk.self.propulsion) {
+      rootPropulsion = app.signalk.self.propulsion
+      isFullTree = true
+    } else {
+      // Fallback to simplified view (might lose source info)
+      rootPropulsion = app.getSelfPath('propulsion')
+    }
+
+    if (!rootPropulsion || typeof rootPropulsion !== 'object') {
+      app.debug(`[${plugin.id}] No propulsion data found in tree.`)
       return []
     }
-  
-    const results = []
-  
-    Object.entries(propulsion).forEach(([key, obj]) => {
-      if (!obj || typeof obj !== 'object') return
-  
-      Object.entries(obj).forEach(([field, value]) => {
+
+    // Iterate Engines (port, starboard, etc.)
+    Object.entries(rootPropulsion).forEach(([key, engineObj]) => {
+      if (!engineObj || typeof engineObj !== 'object') return
+
+      // Iterate Fields (runTime, etc.)
+      Object.entries(engineObj).forEach(([field, node]) => {
         const fieldLower = field.toLowerCase()
+        
         if (fieldLower === 'runtime' || fieldLower === 'runhours') {
           const path = `propulsion.${key}.${field}`
-          
           let sourceLabel = 'unknown'
-          const meta = app.getSelfPath(`${path}.meta`)
-          if (meta && meta.source && meta.source.label) {
-            sourceLabel = meta.source.label
+
+          if (isFullTree && node) {
+            // In Full Tree, 'node' is an object: { value: X, source: 'can0', ... }
+            const sourceId = node.source
+            
+            if (sourceId) {
+              // Try to resolve the readable Label from the Source ID
+              // The sources tree is at app.signalk.sources
+              if (app.signalk.sources && app.signalk.sources[sourceId]) {
+                 const srcDef = app.signalk.sources[sourceId]
+                 // Combine Label + Src (e.g., "N2K" + "8" = "N2K.8") if available
+                 if (srcDef.label && srcDef.src) {
+                   sourceLabel = `${srcDef.label}.${srcDef.src}`
+                 } else if (srcDef.label) {
+                   sourceLabel = srcDef.label
+                 } else {
+                   sourceLabel = sourceId
+                 }
+              } else {
+                sourceLabel = sourceId
+              }
+            }
+          } else {
+            // Fallback for simple view (rarely works for source)
+            const meta = app.getSelfPath(`${path}.meta`)
+            if (meta && meta.source && meta.source.label) {
+              sourceLabel = meta.source.label
+            }
           }
-  
+
           results.push({
             path,
             unit: fieldLower === 'runtime' ? 'seconds' : 'hours',
-            source: sourceLabel
+            source: sourceLabel === 'unknown' ? '' : sourceLabel // Clean string for config
           })
-  
-          app.debug(`[${plugin.id}] Discovered engine: ${path} (Source: ${sourceLabel})`)
+
+          app.debug(`[${plugin.id}] Discovered: ${path} (Source: ${sourceLabel})`)
         }
       })
     })
-  
+
     return results
   }
+
   
   function recordSource(engine, source) {
     if (!source) return
