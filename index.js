@@ -77,46 +77,43 @@ module.exports = function (app) {
   // --------------------
   // Startup
   // --------------------
-  plugin.start = function (opts) {
-    options = opts || {}
+plugin.start = function (opts) {
+  options = opts || {}
 
-    if (options.discoverOnly) {
-      app.debug('Discovery only mode enabled; no injection will occur')
-      return
+  if (options.discoverOnly) {
+    app.debug('Discovery only mode enabled; no injection will occur')
+  }
+
+  // Create engine objects for all configured paths
+  (options.engines || []).forEach(cfg => {
+    const engine = createEngine(cfg)
+    engines.push(engine)
+    subscribe(engine)
+  })
+
+  app.setPluginStatus('Plugin Started - waiting for engines')
+
+  // Report discovered sources after delay
+  discoveryTimer = setTimeout(() => {
+    if (!engines.length) return
+    const text = engines.map(engine => {
+      if (!engine.seenSources.size) return null
+      const sources = [...engine.seenSources.values()]
+        .map(s => s.label || s.src || 'unknown')
+        .join(', ')
+      return `${engine.config.path}: ${sources}`
+    }).filter(Boolean).join('\n')
+
+    if (text) {
+      app.setPluginStatus('Discovered engine runtime sources:\n' + text)
+      app.debug(`[${plugin.id}] Discovery results:\n${text}`)
+    } else {
+      app.setPluginStatus('No engine runtime sources discovered yet.')
+      app.debug('No running engines found.')
     }
+  }, 2000) // 2s delay to collect first events
+}
 
-    const discovered = discoverEngines()
-    publishDiscovery(discovered)
-
-    ;(options.engines || []).forEach(cfg => {
-      const engine = createEngine(cfg)
-      engines.push(engine)
-      subscribe(engine)
-    })
-    app.setPluginStatus('Plugin Started - waiting for engines')
-    // --------------------
-    // Delayed source discovery report
-    // --------------------
-    discoveryTimer = setTimeout(() => {
-      engines.forEach(engine => {
-        if (engine.config.engineSource) return
-        if (!engine.seenSources.size) return
-    
-        const list = [...engine.seenSources.values()]
-          .map(s => `• label=${s.label || 'n/a'}, src=${s.src || 'n/a'}`)
-          .join('\n')
-    
-        app.setPluginStatus(
-          engines.map(e => {
-            if (!e.seenSources.size) return null
-            return `${e.config.path}: ` +
-              [...e.seenSources.values()]
-                .map(s => s.label || s.src)
-                .join(', ')
-          }).filter(Boolean).join('\n')
-        )
-      })
-    }, 30000)
 
   }
 
