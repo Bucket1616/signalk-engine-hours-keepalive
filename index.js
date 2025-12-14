@@ -48,7 +48,7 @@ module.exports = function (app) {
               type: 'string',
               title: 'Runtime path (Signal K)',
               description:
-                'Example: propulsion.port.runtime'
+                'Example: propulsion.port.runTime'
             }
           }
         }
@@ -241,10 +241,11 @@ module.exports = function (app) {
       if (!obj || typeof obj !== 'object') return
   
       Object.entries(obj).forEach(([field, value]) => {
-        if (field === 'runtime' || field === 'runHours') {
+        const fieldLower = field.toLowerCase()
+        if (fieldLower === 'runtime' || field === 'runHhours') {
           results.push({
             path: `propulsion.${key}.${field}`,
-            unit: field === 'runtime' ? 'seconds' : 'hours'
+            unit: fieldLower === 'runtime' ? 'seconds' : 'hours'
           })
         }
       })
@@ -284,8 +285,9 @@ module.exports = function (app) {
     }
 
     // Fallback heuristics
-    if (path.endsWith('runtime')) return 'seconds'
-    if (path.endsWith('runHours')) return 'hours'
+    const lower = path.toLowerCase()
+    if (lower.endsWith('runtime')) return 'seconds'
+    if (lower.endsWith('runhours')) return 'hours'
 
     return 'seconds'
   }
