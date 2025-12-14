@@ -75,7 +75,7 @@ module.exports = function (app) {
       engines.push(engine)
       subscribe(engine)
     })
-  app.setPluginStatusMessage('Plugin Start - Status Tet')
+  app.setPluginStatus('Plugin Started - waiting for engines')
   }
 
   // --------------------
@@ -146,6 +146,7 @@ module.exports = function (app) {
     app.saveData(`engine.${engine.config.path}`, value)
 
     if (engine.isInjecting) {
+      app.setPluginStatus('Engine active: ${engine.config.path}')
       app.debug(
         `[${plugin.id}] Engine resumed transmitting on ${engine.config.path}, stopping keepalive`
       )
@@ -261,7 +262,7 @@ module.exports = function (app) {
 
   function publishDiscovery(list) {
     if (!list.length) {
-      app.setPluginStatusMessage(
+      app.setPluginStatus(
         'Auto-discovery ran, but no engine runtime paths were found.\n' +
         'Make sure engines have run and runtime data exists.'
       )
@@ -272,7 +273,7 @@ module.exports = function (app) {
       'Discovered engine runtime paths:\n' +
       list.map(e => `• ${e.path} (${e.unit})`).join('\n')
   
-    app.setPluginStatusMessage(text)
+    app.setPluginStatus(text)
   }
 
   // --------------------
