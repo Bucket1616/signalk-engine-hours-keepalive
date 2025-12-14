@@ -358,7 +358,7 @@ module.exports = function (app) {
   // --------------------
   // Discover engines using the Full Tree (to get Source info)
   // --------------------
-  function discoverEngines() {
+/*  function discoverEngines() {
     const results = []
 
     // 1. Try to access the Full Tree (app.signalk.self)
@@ -433,6 +433,109 @@ module.exports = function (app) {
 
     return results
   }
+*/
+  // --------------------
+  // DIAGNOSTIC discoverEngines
+  // --------------------
+  function discoverEngines() {
+    app.debug(`[${plugin.id}] --- STARTING DIAGNOSTIC DISCOVERY ---`)
+
+    // 1. Dump the Sources Tree
+    // We need to see how sources are defined (labels vs src vs IDs)
+    if (app.signalk && app.signalk.sources) {
+       app.debug(`[${plugin.id}] DUMP: app.signalk.sources keys: ${Object.keys(app.signalk.sources).join(', ')}`)
+       // We log the first source to see its structure
+       const firstKey = Object.keys(app.signalk.sources)[0]
+       if (firstKey) {
+         app.debug(`[${plugin.id}] DUMP: Sample Source (${firstKey}): ${JSON.stringify(app.signalk.sources[firstKey])}`)
+       }
+    } else {
+       app.debug(`[${plugin.id}] ERROR: app.signalk.sources is undefined or empty`)
+    }
+
+    // 2. Dump the Propulsion Tree (Full Tree)
+    // We need to see if the nodes actually have a .source property
+    if (app.signalk && app.signalk.self && app.signalk.self.propulsion) {
+       app.debug(`[${plugin.id}] DUMP: app.signalk.self.propulsion structure:`)
+       app.debug(JSON.stringify(app.signalk.self.propulsion, null, 2))
+    } else {
+       app.debug(`[${plugin.id}] ERROR: app.signalk.self.propulsion is undefined`)
+    }
+
+    // ------------------------------------------------
+    // Original Logic (Wrapped in logging)
+    // ------------------------------------------------
+    const results = []
+    let rootPropulsion = app.signalk?.self?.propulsion
+
+    if (!rootPropulsion) {
+      // Fallback
+      app.debug(`[${plugin.id}] Falling back to app.getSelfPath`)
+      rootPropulsion = app.getSelfPath('propulsion')
+    }
+
+    if (!rootPropulsion) return []
+
+    Object.entries(rootPropulsion).forEach(([key, engineObj]) => {
+      // key = "port", "starboard"
+      if (!engineObj || typeof engineObj !== 'object') return
+
+      Object.entries(engineObj).forEach(([field, node]) => {
+        const fieldLower = field.toLowerCase()
+        
+        if (fieldLower === 'runtime' || fieldLower === 'runhours') {
+          const path = `propulsion.${key}.${field}`
+          app.debug(`[${plugin.id}] INSPECTING NODE: ${path}`)
+          app.debug(`[${plugin.id}] Node Data: ${JSON.stringify(node)}`)
+
+          // Attempt Source Resolution
+          let sourceLabel = 'unknown'
+          
+          // Check if node has .source (Full Tree)
+          if (node && node.source) {
+            const sourceId = node.source
+            app.debug(`[${plugin.id}] -> Found source ID: "${sourceId}"`)
+            
+            // Look up in sources
+            if (app.signalk.sources && app.signalk.sources[sourceId]) {
+               const srcDef = app.signalk.sources[sourceId]
+               app.debug(`[${plugin.id}] -> Found Source Def: ${JSON.stringify(srcDef)}`)
+               
+               if (srcDef.label && srcDef.src) {
+                 sourceLabel = `${srcDef.label}.${srcDef.src}`
+               } else if (srcDef.label) {
+                 sourceLabel = srcDef.label
+               } else {
+                 sourceLabel = sourceId
+               }
+            } else {
+               app.debug(`[${plugin.id}] -> Source ID "${sourceId}" NOT FOUND in app.signalk.sources`)
+               sourceLabel = sourceId
+            }
+          } 
+          // Check Metadata (Simplified View fallback)
+          else {
+             app.debug(`[${plugin.id}] -> No .source property on node. Checking Meta...`)
+             const meta = app.getSelfPath(`${path}.meta`)
+             app.debug(`[${plugin.id}] -> Meta: ${JSON.stringify(meta)}`)
+             if (meta && meta.source && meta.source.label) {
+               sourceLabel = meta.source.label
+             }
+          }
+
+          results.push({
+            path,
+            unit: fieldLower === 'runtime' ? 'seconds' : 'hours',
+            source: sourceLabel === 'unknown' ? '' : sourceLabel
+          })
+        }
+      })
+    })
+
+    app.debug(`[${plugin.id}] --- END DIAGNOSTIC ---`)
+    return results
+  }
+
 
   
   function recordSource(engine, source) {
