@@ -5,6 +5,7 @@ module.exports = function (app) {
   let options = {}
   let engines = []
   let unsubscribes = []
+  let discoveryTimer = null
 
   plugin.id = 'signalk-engine-hours-keepalive'
   plugin.name = 'Engine Hours Keepalive'
@@ -77,7 +78,6 @@ module.exports = function (app) {
   // Startup
   // --------------------
   plugin.start = function (opts) {
-    let discoveryTimer = null
     options = opts || {}
 
     if (options.discoverOnly) {
