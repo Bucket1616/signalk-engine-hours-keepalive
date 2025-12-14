@@ -360,27 +360,36 @@ function handleRuntime(engine, value, meta) {
   function discoverEngines() {
     const propulsion = app.getSelfPath('propulsion')
     if (!propulsion || typeof propulsion !== 'object') return []
-
+  
     const results = []
-
+  
     Object.entries(propulsion).forEach(([key, obj]) => {
       if (!obj || typeof obj !== 'object') return
-
+  
       Object.entries(obj).forEach(([field, value]) => {
         const fieldLower = field.toLowerCase()
-        if (fieldLower === 'runtime' || field === 'runhours') {
+        if (fieldLower === 'runtime' || fieldLower === 'runhours') {
+          const path = `propulsion.${key}.${field}`
+  
+          // Try to get the source from the metadata
+          let sourceLabel = 'unknown'
+          const meta = app.getSelfPath(path + '.meta')
+          if (meta && meta.source && meta.source.label) {
+            sourceLabel = meta.source.label
+          }
+  
           results.push({
-            path: `propulsion.${key}.${field}`,
-            unit: fieldLower === 'runtime' ? 'seconds' : 'hours'
+            path,
+            unit: fieldLower === 'runtime' ? 'seconds' : 'hours',
+            source: sourceLabel
           })
+  
+          // Log both path and source in the same entry
+          app.debug(`[${plugin.id}] Discovered engine: ${path}, source: ${sourceLabel}`)
         }
       })
     })
-
-    results.forEach(e =>
-      app.debug(`Discovered runtime path: ${e.path}`)
-    )
-
+  
     return results
   }
 
@@ -393,9 +402,10 @@ function handleRuntime(engine, value, meta) {
       return
     }
 
+  
     const text =
       'Discovered engine runtime paths:\n' +
-      list.map(e => `• ${e.path} (${e.unit})`).join('\n')
+      list.map(e => `• ${e.path} (${e.unit}), source: ${e.source}`).join('\n')
 
     app.setPluginStatus(text)
   }
