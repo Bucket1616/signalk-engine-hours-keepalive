@@ -24,7 +24,7 @@ module.exports = function (app) {
       startDelaySeconds: {
         type: 'number',
         title: 'Silence delay before keepalive starts (seconds)',
-        default: 20
+        default: 6
       },
       transmitIntervalSeconds: {
         type: 'number',
