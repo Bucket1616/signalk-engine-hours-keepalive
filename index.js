@@ -75,7 +75,7 @@ module.exports = function (app) {
       engines.push(engine)
       subscribe(engine)
     })
-  app.setPluginStatus('Plugin Start - Status Tet')
+  app.setPluginStatusMessage('Plugin Start - Status Tet')
   }
 
   // --------------------
@@ -261,7 +261,7 @@ module.exports = function (app) {
 
   function publishDiscovery(list) {
     if (!list.length) {
-      app.setPluginStatus(
+      app.setPluginStatusMessage(
         'Auto-discovery ran, but no engine runtime paths were found.\n' +
         'Make sure engines have run and runtime data exists.'
       )
@@ -272,7 +272,7 @@ module.exports = function (app) {
       'Discovered engine runtime paths:\n' +
       list.map(e => `• ${e.path} (${e.unit})`).join('\n')
   
-    app.setPluginStatus(text)
+    app.setPluginStatusMessage(text)
   }
 
   // --------------------
