@@ -189,7 +189,7 @@ module.exports = function (app) {
         app.debug(
         `[${plugin.id}] Stream update received on ${engine.config.path}: value=${value}, source=${JSON.stringify(meta?.source)}`
         )  
-        handleRuntime(engine, value, meta));
+        handleRuntime(engine, value, meta);
 
     unsubscribes.push(() => unsubRuntime.unsubscribe?.() || unsubRuntime.end?.(true));
 
@@ -289,6 +289,7 @@ function handleRuntime(engine, value, meta) {
         `[${plugin.id}] Discovered runtime source for ${engine.config.path}: ` +
         `label=${source.label || 'n/a'}, src=${source.src || 'n/a'}`
       )
+    }
     else {
       app.debug(`[${plugin.id}] Runtime source already known for ${engine.config.path}: ${key}`)
     }
