@@ -72,40 +72,81 @@ module.exports = function (app) {
       }
     }
   }
+  // --------------------
+  // Startup
+  // --------------------
   plugin.start = function (opts) {
     options = opts || {}
+  
+    // Clear engines array and unsubscribes in case of restart
     engines = []
     unsubscribes = []
-
-    app.debug(`[${plugin.id}] Starting...`)
-
-    // 1. Run Discovery (Best effort)
+  
+    app.debug(`[${plugin.id}] Plugin starting...`)
+  
+    // --------------------
+    // 1. Run raw discovery
+    // --------------------
     const discovered = discoverEngines()
-    publishDiscovery(discovered)
-
-    if (options.discoverOnly) return
-
-    // 2. Merge Discovery with Config? 
-    let configsToLoad = options.engines || []
     
-    // Fallback: If no config exists, try to use discovered engines
-    if (configsToLoad.length === 0 && discovered.length > 0) {
-      app.debug(`[${plugin.id}] No config found, using discovered engines.`)
-      configsToLoad = discovered.map(d => ({ path: d.path }))
+    // --------------------
+    // 2. Determine Configuration (Manual vs Auto)
+    // --------------------
+    let configsToMonitor = options.engines || []
+    let isAutoConfig = false
+
+    // If no manual config exists, try to use discovered engines
+    if (configsToMonitor.length === 0) {
+      if (discovered.length > 0) {
+        app.debug(`[${plugin.id}] No manual config. Auto-configuring from discovery.`)
+        isAutoConfig = true
+        configsToMonitor = discovered.map(d => ({
+          path: d.path,
+          engineSource: '' // Default to loose source matching for auto-config
+        }))
+      }
     }
 
-    configsToLoad.forEach(cfg => {
-      // Validate path before creating
-      if (!cfg.path) return
+    // --------------------
+    // 3. Handle "Discovery Only" Mode
+    // --------------------
+    if (options.discoverOnly) {
+      let statusMsg = `Discovery Only Mode - No Keepalive Injection.\n`
+      
+      if (configsToMonitor.length === 0) {
+        statusMsg += `Result: No engines configured and none discovered.`
+      } else {
+        const mode = isAutoConfig ? "AUTO (Discovered)" : "MANUAL (Settings)"
+        const paths = configsToMonitor.map(c => c.path).join(', ')
+        statusMsg += `Config Mode: ${mode}.\n`
+        statusMsg += `If enabled, would monitor: ${paths}`
+      }
+      
+      app.setPluginStatus(statusMsg)
+      app.debug(`[${plugin.id}] ${statusMsg}`)
+      return // Stop here
+    }
+
+    // --------------------
+    // 4. Validate and Start
+    // --------------------
+    if (configsToMonitor.length === 0) {
+      app.setPluginStatus('Waiting: No engines configured and none discovered yet.')
+      return
+    }
+
+    configsToMonitor.forEach(cfg => {
+      // Create the engine object (validates path format internally)
       const engine = createEngine(cfg)
       if (engine) {
         engines.push(engine)
         subscribe(engine)
       }
     })
-    
+  
     app.setPluginStatus(`Running: Monitoring ${engines.length} engines.`)
   }
+
 
   plugin.stop = function () {
     engines.forEach(stopInjection)
@@ -115,20 +156,27 @@ module.exports = function (app) {
     if (discoveryTimer) clearTimeout(discoveryTimer)
   }
 
+  // --------------------
+  // Engine object
+  // --------------------
   function createEngine(config) {
+    // Validate path and extract ID (e.g. 'port', 'starboard')
+    // Expected format: propulsion.<id>.runTime
+    if (!config.path) return null
+    
     const parts = config.path.split('.')
+    // Basic validation: must be propulsion.something.something
     if (parts.length < 3 || parts[0] !== 'propulsion') {
       app.debug(`[${plugin.id}] Invalid path format: ${config.path}`)
       return null
     }
 
-    // Usually propulsion.<id>.runTime
-    const id = parts[1] 
+    const id = parts[1] // 'port', 'starboard', 'main', etc.
 
     const engine = {
       config,
-      signalkId: id,
-      basePath: `propulsion.${id}`,
+      signalkId: id, // <--- CRITICAL for emitDelta
+      basePath: `propulsion.${id}`, 
       lastValue: null,
       lastKnown: {},
       timeout: null,
@@ -137,11 +185,12 @@ module.exports = function (app) {
       seenSources: new Map()
     }
 
-    // Try to restore initial value
+    // Restore persisted value
     const restored = app.getSelfPath(config.path)
     if (typeof restored === 'number') {
       engine.lastValue = restored
     }
+
     return engine
   }
 
