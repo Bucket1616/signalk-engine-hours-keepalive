@@ -72,6 +72,7 @@ module.exports = function (app) {
       }
     }
   }
+
   // --------------------
   // Startup
   // --------------------
@@ -111,24 +112,33 @@ module.exports = function (app) {
     // 3. Handle "Discovery Only" Mode
     // --------------------
     if (options.discoverOnly) {
-      let statusMsg = `Discovery Only Mode - No Keepalive Injection.\n`
+      let statusMsg = `Discovery Only Mode Active.\n`
       
       if (configsToMonitor.length === 0) {
-        statusMsg += `Result: No engines configured and none discovered.`
+        statusMsg += `State: No engines configured and none found via discovery.`
       } else {
         const mode = isAutoConfig ? "AUTO (Discovered)" : "MANUAL (Settings)"
-        const paths = configsToMonitor.map(c => c.path).join(', ')
-        statusMsg += `Config Mode: ${mode}.\n`
-        statusMsg += `If enabled, would monitor: ${paths}`
+        statusMsg += `Config Source: ${mode}.\n`
+        statusMsg += `The following engines WOULD be monitored if this mode was off:\n`
+        
+        // Show the user exactly what we found
+        configsToMonitor.forEach(c => {
+          statusMsg += ` • ${c.path} `
+          if(c.engineSource) statusMsg += `(Source required: ${c.engineSource})`
+          statusMsg += `\n`
+        })
       }
       
+      // We publish the detailed status so the user can verify
       app.setPluginStatus(statusMsg)
       app.debug(`[${plugin.id}] ${statusMsg}`)
-      return // Stop here
+      
+      // Stop here - do not create actual engine objects or subscribe
+      return 
     }
 
     // --------------------
-    // 4. Validate and Start
+    // 4. Validate and Start (Real Mode)
     // --------------------
     if (configsToMonitor.length === 0) {
       app.setPluginStatus('Waiting: No engines configured and none discovered yet.')
@@ -146,7 +156,6 @@ module.exports = function (app) {
   
     app.setPluginStatus(`Running: Monitoring ${engines.length} engines.`)
   }
-
 
   plugin.stop = function () {
     engines.forEach(stopInjection)
@@ -185,7 +194,7 @@ module.exports = function (app) {
       seenSources: new Map()
     }
 
-    // Restore persisted value
+    // Restore persisted value (Important for Cold Start)
     const restored = app.getSelfPath(config.path)
     if (typeof restored === 'number') {
       engine.lastValue = restored
@@ -194,13 +203,15 @@ module.exports = function (app) {
     return engine
   }
 
+  // --------------------
+  // Subscriptions
+  // --------------------
   function subscribe(engine) {
     // 1. Runtime Subscription
     const stream = app.streambundle.getSelfStream(engine.config.path)
     
     const unsubRuntime = stream.onValue((value) => {
       // Get the metadata for the *current* value to check source
-      // Note: app.getSelfPath(path + '.meta') is safer than meta arg in some SK versions
       const meta = app.getSelfPath(engine.config.path + '.meta')
       handleRuntime(engine, value, meta)
     })
@@ -210,11 +221,6 @@ module.exports = function (app) {
     const fields = options.keepaliveFields || ['revolutions', 'oilPressure', 'fuelRate']
     
     fields.forEach(field => {
-      // skip revolutions/oilPressure as we want to fake those to 0, 
-      // but we still might want to subscribe to know they are alive?
-      // Actually, we usually only need lastKnown for things like Temp.
-      // 0-ing out RPM is handled in emitDelta.
-      
       let suffix = ''
       switch (field) {
         case 'revolutions': suffix = 'revolutions'; break
@@ -225,18 +231,30 @@ module.exports = function (app) {
         default: return
       }
 
-      const fullPath = `${engine.basePath}.${suffix}`
-
-      // Store 'last known' for temperatures, but ignore RPM/Press (we force those to 0)
+      // We handle these fields differently (forced 0), so we don't need lastKnown values for them
       if (['revolutions', 'oilPressure', 'fuelRate'].includes(field)) return
 
+      const fullPath = `${engine.basePath}.${suffix}`
       const unsub = app.streambundle.getSelfStream(fullPath).onValue(val => {
         engine.lastKnown[field] = val
       })
       unsubscribes.push(unsub)
     })
+
+    // -----------------------------------------------------
+    // Cold Start Handling: 
+    // If the engine is OFF when the system boots, we have a value (restored) 
+    // but no stream updates coming in. We must manually trigger the silence timer.
+    // -----------------------------------------------------
+    if (engine.lastValue !== null && engine.lastValue !== undefined) {
+      app.debug(`[${plugin.id}] Initial value found for ${engine.config.path}. Starting silence timer...`)
+      resetSilenceTimer(engine)
+    }
   }
 
+  // --------------------
+  // Runtime Logic
+  // --------------------
   function handleRuntime(engine, value, meta) {
     if (typeof value !== 'number') return
 
@@ -258,8 +276,12 @@ module.exports = function (app) {
     }
 
     // Reset the "Silence Detection" timer
+    resetSilenceTimer(engine)
+  }
+
+  function resetSilenceTimer(engine) {
     if (engine.timeout) clearTimeout(engine.timeout)
-    
+
     engine.timeout = setTimeout(() => {
       app.debug(`[${plugin.id}] Silence detected on ${engine.config.path}. Starting Keepalive.`)
       startInjection(engine)
@@ -334,7 +356,7 @@ module.exports = function (app) {
   }
 
   // --------------------
-  // Discover engines from current propulsion data
+  // Helpers
   // --------------------
   function discoverEngines() {
     const propulsion = app.getSelfPath('propulsion')
@@ -366,7 +388,6 @@ module.exports = function (app) {
             source: sourceLabel
           })
   
-          // Log path + source
           app.debug(`[${plugin.id}] Discovered engine: ${path}, source: ${sourceLabel}`)
         }
       })
@@ -375,24 +396,14 @@ module.exports = function (app) {
     return results
   }
   
-  // --------------------
-  // Update dashboard with discovery results
-  // --------------------
-  function publishDiscovery(list) {
-    if (!list.length) {
-      app.setPluginStatus(
-        'Auto-discovery ran, but no engine runtime paths were found.\n' +
-        'Make sure engines have run and runtime data exists.'
-      )
-      return
+  function recordSource(engine, source) {
+    if (!source) return
+    const key = source.label || source.src
+    if (!engine.seenSources.has(key)) {
+      engine.seenSources.set(key, source)
     }
-  
-    const text =
-      'Discovered engine runtime paths:\n' +
-      list.map(e => `• ${e.path} (${e.unit}), source: ${e.source}`).join('\n')
-  
-    app.setPluginStatus(text)
   }
+  
   function isRealEngineSource(engine, source) {
     if (!source) return true // Assume real if no source info (safer)
     if (source.label === plugin.id) return false // Ignore self
