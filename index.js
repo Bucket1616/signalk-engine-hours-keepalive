@@ -114,9 +114,7 @@ module.exports = function (app) {
         )
       }
     
-      subscribeRuntime(engine)
-      subscribeRPM(engine)
-    
+      subscrib(engine)    
       return engine
     }
 
