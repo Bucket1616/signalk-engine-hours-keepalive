@@ -96,7 +96,13 @@ module.exports = function (app) {
   // Engine object
   // --------------------
   function createEngine(config) {
-    const saved = app.getData(`engine.${config.path}`)
+    const saved = app.getPluginData(`engine.${config.path}`)
+    if (typeof saved === 'number') {
+      engine.lastValue = saved
+      app.debug(
+        `[${plugin.id}] Restored saved runtime for ${config.path}: ${saved}`
+      )
+    }
     const unit = detectUnit(config.path)
 
     return {
@@ -147,7 +153,7 @@ module.exports = function (app) {
 
     engine.lastValue = value
     engine.lastSeen = Date.now()
-    app.saveData(`engine.${engine.config.path}`, value)
+    app.savePluginData(`engine.${engine.config.path}`, value)
 
     if (engine.isInjecting) {
       app.setPluginStatus('Engine active: ${engine.config.path}')
