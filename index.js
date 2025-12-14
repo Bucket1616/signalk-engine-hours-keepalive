@@ -66,13 +66,13 @@ module.exports = function (app) {
   plugin.start = function (opts) {
     options = opts || {}
 
+    const discovered = discoverEngines()
+    publishDiscovery(discovered)
+
     if (options.discoverOnly) {
       app.debug('Discovery only mode enabled; no injection will occur')
       return
     }
-
-    const discovered = discoverEngines()
-    publishDiscovery(discovered)
 
     ;(options.engines || []).forEach(cfg => {
       const engine = createEngine(cfg)
@@ -114,7 +114,6 @@ module.exports = function (app) {
         )
       }
     
-      subscrib(engine)    
       return engine
     }
 
@@ -156,7 +155,7 @@ module.exports = function (app) {
     ) 
 
     if (engine.isInjecting) {
-      app.setPluginStatus('Engine active: ${engine.config.path}')
+      app.setPluginStatus(`Engine active: ${engine.config.path}`)
       app.debug(
         `[${plugin.id}] Engine resumed transmitting on ${engine.config.path}, stopping keepalive`
       )
@@ -254,7 +253,7 @@ module.exports = function (app) {
   
       Object.entries(obj).forEach(([field, value]) => {
         const fieldLower = field.toLowerCase()
-        if (fieldLower === 'runtime' || field === 'runHhours') {
+        if (fieldLower === 'runtime' || field === 'runhours') {
           results.push({
             path: `propulsion.${key}.${field}`,
             unit: fieldLower === 'runtime' ? 'seconds' : 'hours'
