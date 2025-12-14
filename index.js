@@ -230,8 +230,66 @@ module.exports = function (app) {
     app.handleMessage(plugin.id, delta)
   }
 
-  // ... (Keep your discoverEngines and recordSource helpers, they looked fine) ...
-
+  // --------------------
+  // Discover engines from current propulsion data
+  // --------------------
+  function discoverEngines() {
+    const propulsion = app.getSelfPath('propulsion')
+    if (!propulsion || typeof propulsion !== 'object') {
+      app.debug(`[${plugin.id}] No propulsion data found for discovery`)
+      return []
+    }
+  
+    const results = []
+  
+    Object.entries(propulsion).forEach(([key, obj]) => {
+      if (!obj || typeof obj !== 'object') return
+  
+      Object.entries(obj).forEach(([field, value]) => {
+        const fieldLower = field.toLowerCase()
+        if (fieldLower === 'runtime' || fieldLower === 'runhours') {
+          const path = `propulsion.${key}.${field}`
+  
+          // Try to get the source from metadata
+          let sourceLabel = 'unknown'
+          const meta = app.getSelfPath(`${path}.meta`)
+          if (meta && meta.source && meta.source.label) {
+            sourceLabel = meta.source.label
+          }
+  
+          results.push({
+            path,
+            unit: fieldLower === 'runtime' ? 'seconds' : 'hours',
+            source: sourceLabel
+          })
+  
+          // Log path + source
+          app.debug(`[${plugin.id}] Discovered engine: ${path}, source: ${sourceLabel}`)
+        }
+      })
+    })
+  
+    return results
+  }
+  
+  // --------------------
+  // Update dashboard with discovery results
+  // --------------------
+  function publishDiscovery(list) {
+    if (!list.length) {
+      app.setPluginStatus(
+        'Auto-discovery ran, but no engine runtime paths were found.\n' +
+        'Make sure engines have run and runtime data exists.'
+      )
+      return
+    }
+  
+    const text =
+      'Discovered engine runtime paths:\n' +
+      list.map(e => `• ${e.path} (${e.unit}), source: ${e.source}`).join('\n')
+  
+    app.setPluginStatus(text)
+  }
   function isRealEngineSource(engine, source) {
     if (!source) return true // Assume real if no source info (safer)
     if (source.label === plugin.id) return false // Ignore self
