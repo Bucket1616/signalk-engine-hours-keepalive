@@ -60,6 +60,12 @@ module.exports = function (app) {
               title: 'Runtime path (Signal K)',
               description:
                 'Example: propulsion.port.runTime'
+            },
+            engineSource: {
+              type: 'string',
+              title: 'Engine runtime source (label or src)',
+              description:
+                'Only runtime updates from this source indicate a real engine. Leave empty to auto-discover.'
             }
           }
         }
@@ -71,6 +77,7 @@ module.exports = function (app) {
   // Startup
   // --------------------
   plugin.start = function (opts) {
+    let discoveryTimer = null
     options = opts || {}
 
     if (options.discoverOnly) {
@@ -87,6 +94,30 @@ module.exports = function (app) {
       subscribe(engine)
     })
     app.setPluginStatus('Plugin Started - waiting for engines')
+    // --------------------
+    // Delayed source discovery report
+    // --------------------
+    discoveryTimer = setTimeout(() => {
+      engines.forEach(engine => {
+        if (engine.config.engineSource) return
+        if (!engine.seenSources.size) return
+    
+        const list = [...engine.seenSources.values()]
+          .map(s => `• label=${s.label || 'n/a'}, src=${s.src || 'n/a'}`)
+          .join('\n')
+    
+        app.setPluginStatus(
+          engines.map(e => {
+            if (!e.seenSources.size) return null
+            return `${e.config.path}: ` +
+              [...e.seenSources.values()]
+                .map(s => s.label || s.src)
+                .join(', ')
+          }).filter(Boolean).join('\n')
+        )
+      })
+    }, 30000)
+
   }
 
   // --------------------
@@ -97,6 +128,12 @@ module.exports = function (app) {
     unsubscribes.forEach(fn => fn())
     engines = []
     unsubscribes = []
+
+    if (discoveryTimer) {
+      clearTimeout(discoveryTimer)
+      discoveryTimer = null
+    }
+
   }
 
   // --------------------
@@ -110,7 +147,8 @@ module.exports = function (app) {
       timeout: null,
       interval: null,
       isInjecting: false,
-      rpmAlive: false
+      rpmAlive: false,
+      seenSources: new Map()
     }
 
     // restore persisted value
@@ -132,7 +170,7 @@ module.exports = function (app) {
     // Runtime subscription
     const unsubRuntime = app.streambundle
       .getSelfStream(engine.config.path)
-      .onValue(value => handleRuntime(engine, value));
+      .onValue((value, meta) => handleRuntime(engine, value, meta));
 
     unsubscribes.push(() => unsubRuntime.unsubscribe?.() || unsubRuntime.end?.(true));
 
@@ -175,37 +213,74 @@ module.exports = function (app) {
   // --------------------
   // Runtime handler
   // --------------------
-  function handleRuntime(engine, value) {
-    if (typeof value !== 'number') return
+function handleRuntime(engine, value, meta) {
+  if (typeof value !== 'number') return
 
-    engine.lastValue = value
-    engine.lastSeen = Date.now()
+  const source = meta?.source
+  recordSource(engine, source)
 
+  if (!isRealEngineSource(engine, source)) {
     app.debug(
-      `[${plugin.id}] Runtime received from ${engine.config.path}: ${value}`
-    ) 
-
-    if (engine.isInjecting) {
-      app.setPluginStatus(`Engine active: ${engine.config.path}`)
-      app.debug(
-        `[${plugin.id}] Engine resumed transmitting on ${engine.config.path}, stopping keepalive`
-      )
-    }
-
-    stopInjection(engine)
-
-    engine.timeout = setTimeout(() => {
-      app.debug(
-        `[${plugin.id}] No runtime seen for ${options.startDelaySeconds}s on ${engine.config.path}`
-      )
-
-      app.debug(
-        `[${plugin.id}] Engine appears stopped, starting keepalive for ${engine.config.path}`
-      )
-      startInjection(engine)
-    }, options.startDelaySeconds * 1000)
+      `[${plugin.id}] Ignoring runtime from non-engine source ` +
+      `(${source?.label || source?.src || 'unknown'}) on ${engine.config.path}`
+    )
+    return
   }
 
+  engine.lastValue = value
+  engine.lastSeen = Date.now()
+
+  app.debug(
+    `[${plugin.id}] Runtime received from REAL engine source ` +
+    `(${source?.label || source?.src}): ${value} @ ${engine.config.path}`
+  )
+
+  if (engine.isInjecting) {
+    app.setPluginStatus(`Engine active: ${engine.config.path}`)
+    app.debug(
+      `[${plugin.id}] Engine resumed transmitting, stopping keepalive for ${engine.config.path}`
+    )
+  }
+
+  stopInjection(engine)
+
+  engine.timeout = setTimeout(() => {
+    app.debug(
+      `[${plugin.id}] No runtime seen for ${options.startDelaySeconds}s on ${engine.config.path}`
+    )
+
+    app.debug(
+      `[${plugin.id}] Engine appears stopped, starting keepalive for ${engine.config.path}`
+    )
+    startInjection(engine)
+  }, options.startDelaySeconds * 1000)
+}
+
+
+  function recordSource(engine, source) {
+    if (!source) return
+    const key = source.label || source.src
+    if (!engine.seenSources.has(key)) {
+      engine.seenSources.set(key, source)
+      app.debug(
+        `[${plugin.id}] Discovered runtime source for ${engine.config.path}: ` +
+        `label=${source.label || 'n/a'}, src=${source.src || 'n/a'}`
+      )
+    }
+  }
+  
+  function isRealEngineSource(engine, source) {
+    if (!source) return false
+  
+    const configured = engine.config.engineSource
+    if (!configured) return true // permissive until configured
+  
+    return (
+      source.label === configured ||
+      String(source.src) === String(configured)
+    )
+  }
+  
   // --------------------
   // Injection control
   // --------------------
