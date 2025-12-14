@@ -185,7 +185,11 @@ module.exports = function (app) {
     // Runtime subscription
     const unsubRuntime = app.streambundle
       .getSelfStream(engine.config.path)
-      .onValue((value, meta) => handleRuntime(engine, value, meta));
+      .onValue((value, meta) => {
+        app.debug(
+        `[${plugin.id}] Stream update received on ${engine.config.path}: value=${value}, source=${JSON.stringify(meta?.source)}`
+        )  
+        handleRuntime(engine, value, meta));
 
     unsubscribes.push(() => unsubRuntime.unsubscribe?.() || unsubRuntime.end?.(true));
 
@@ -216,6 +220,7 @@ module.exports = function (app) {
       const unsub = app.streambundle
         .getSelfStream(path)
         .onValue(val => {
+          app.debug(`[${plugin.id}] Keepalive field ${field} update on ${path}: ${val}`)
           if (!['revolutions', 'oilPressure', 'fuelRate'].includes(field)) {
             engine.lastKnown[field] = val;
           }
@@ -236,8 +241,8 @@ function handleRuntime(engine, value, meta) {
 
   if (!isRealEngineSource(engine, source)) {
     app.debug(
-      `[${plugin.id}] Ignoring runtime from non-engine source ` +
-      `(${source?.label || source?.src || 'unknown'}) on ${engine.config.path}`
+      `[${plugin.id}] Ignored runtime update from ${engine.config.path}: ` +
+      `value=${value}, source=${JSON.stringify(source)}`
     )
     return
   }
@@ -273,7 +278,10 @@ function handleRuntime(engine, value, meta) {
 
 
   function recordSource(engine, source) {
-    if (!source) return
+    if (!source) {
+      app.debug(`[${plugin.id}] No source info for ${engine.config.path}`)
+      return
+    }
     const key = source.label || source.src
     if (!engine.seenSources.has(key)) {
       engine.seenSources.set(key, source)
@@ -281,6 +289,8 @@ function handleRuntime(engine, value, meta) {
         `[${plugin.id}] Discovered runtime source for ${engine.config.path}: ` +
         `label=${source.label || 'n/a'}, src=${source.src || 'n/a'}`
       )
+    else {
+      app.debug(`[${plugin.id}] Runtime source already known for ${engine.config.path}: ${key}`)
     }
   }
   
