@@ -188,8 +188,9 @@ module.exports = function (app) {
       .onValue((value, meta) => {
         app.debug(
         `[${plugin.id}] Stream update received on ${engine.config.path}: value=${value}, source=${JSON.stringify(meta?.source)}`
-        )  
+        ) ; 
         handleRuntime(engine, value, meta);
+      });
 
     unsubscribes.push(() => unsubRuntime.unsubscribe?.() || unsubRuntime.end?.(true));
 
