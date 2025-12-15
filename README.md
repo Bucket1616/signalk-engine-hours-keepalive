@@ -3,6 +3,15 @@
 Signal K server plugin that repeats the last known engine run hours
 over NMEA2000 when engines stop transmitting.
 
+## NOT POSSIBLE
+
+The plugin works, however, the persisted engine hours data come from a differnt
+NMEA source (the NMEAgateway), the chartplotter is not configured to see that.
+I want the data to come from the engine gateway whenever possible, so there does
+not seem to be a solution to this, unless the firmware in my engine gateway is
+updated such that it persists the runTime data.
+Keeping this repo for now, but will delete eventually.
+
 ## Why?
 
 Many chartplotters and MFDs forget engine hours when engines are off.
