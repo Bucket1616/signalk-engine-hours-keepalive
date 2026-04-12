@@ -24,7 +24,7 @@ module.exports = function (app) {
       rpmTimeoutSeconds: {
         type: 'number',
         title: 'RPM timeout - delay before switching to keepalive mode (seconds)',
-        default: 6
+        default: 3
       },
       keepaliveRepeatSeconds: {
         type: 'number',
