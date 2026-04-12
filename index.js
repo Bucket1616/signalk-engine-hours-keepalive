@@ -26,11 +26,6 @@ module.exports = function (app) {
         title: 'RPM timeout - delay before switching to keepalive mode (seconds)',
         default: 6
       },
-      activeRepeatSeconds: {
-        type: 'number',
-        title: 'Active repeat interval - when RPM is present (seconds)',
-        default: 1
-      },
       keepaliveRepeatSeconds: {
         type: 'number',
         title: 'Keepalive repeat interval - when RPM is absent (seconds)',
@@ -106,15 +101,16 @@ module.exports = function (app) {
       config,
       lastRuntime: null,        // changed from lastValue
       rpmTimeout: null,         // changed from timeout
-      repeatInterval: null,     // changed from interval
       isKeepaliveMode: false,   // NEW - tracks which mode we're in
-      rpmPresent: false         // changed from rpmAlive
+      rpmPresent: false,         // changed from rpmAlive
+      hasInitialValue: false
     }
   
      // restore persisted value
     const restored = app.getSelfPath(config.path)
     if (typeof restored === 'number') {
       engine.lastRuntime = restored
+      engine.hasInitialValue = true
       app.debug(
         `[${plugin.id}] Restored runtime from model for ${config.path}: ${restored}`
       )
@@ -129,11 +125,13 @@ module.exports = function (app) {
   function subscribe(engine) {
     // Runtime subscription
     const unsubRuntime = app.streambundle
-      .getSelfStream(engine.config.path)
-      .onValue(value => handleRuntime(engine, value))
+     .getSelfStream(engine.config.path)
+      .onValue(delta => {
+        const value = delta.value || delta  // Handle different stream formats
+        handleRuntime(engine, value, delta)
+      })
 
     unsubscribes.push(unsubRuntime)
-
     // RPM corroboration (best-effort)
     const rpmPath = engine.config.path
       .replace(/runtime|runHours$/, 'revolutions')
@@ -162,7 +160,7 @@ module.exports = function (app) {
       // If we were in keepalive mode, switch back to active mode
       if (engine.isKeepaliveMode) {
         app.debug(`[${plugin.id}] RPM detected on ${engine.config.path}, switching to active mode`)
-        switchToActiveMode(engine)
+        engine.isKeepaliveMode = false
       }
     } else if (wasPresent && !engine.rpmPresent) {
       // RPM just stopped - start timeout
@@ -178,45 +176,37 @@ module.exports = function (app) {
     if (typeof value !== 'number') return
   
     engine.lastRuntime = value
+    engine.hasInitialValue = true   //We now have a value
+    
     app.debug(`[${plugin.id}] Runtime received from ${engine.config.path}: ${value}`)
   
     // Always emit immediately when we receive a new value
     emitDelta(engine)
   
-    // Start repeating if not already doing so
-    if (!engine.repeatInterval) {
-      if (engine.rpmPresent) {
-        startActiveMode(engine)
-      } else {
-        startKeepaliveMode(engine)
+    // Simplify mode selection
+    if (engine.rpmPresent) {
+      engineisKeepaliveMode = false
+      app.debug(`[${plugin.id}] Active mode for ${engine.config.path}`)
+    } else {
+      // Only start keepalive if we have an initial value
+      if (engine.hasInitialValue) {
+      	startKeepaliveMode(engine)
       }
     }
   }
+
   
   function startRpmTimeout(engine) {
     if (engine.rpmTimeout) clearTimeout(engine.rpmTimeout)
   
     engine.rpmTimeout = setTimeout(() => {
       app.debug(`[${plugin.id}] No RPM seen for ${options.rpmTimeoutSeconds}s on ${engine.config.path}, switching to keepalive mode`)
-      switchToKeepaliveMode(engine)
+      startKeepaliveMode(engine)
     }, options.rpmTimeoutSeconds * 1000)
   }
   
-  function startActiveMode(engine) {
-    if (engine.repeatInterval) return
-
-    engine.isKeepaliveMode = false
-    engine.repeatInterval = setInterval(
-      () => emitDelta(engine),
-      options.activeRepeatSeconds * 1000
-    )
-    app.setPluginStatus(`Active mode: ${engine.config.path}`)
-   app.debug(`[${plugin.id}] Active repeat started for ${engine.config.path} (${options.activeRepeatSeconds}s interval)`)
-  }
 
   function startKeepaliveMode(engine) {
-    if (engine.repeatInterval) return
-
     engine.isKeepaliveMode = true
     engine.repeatInterval = setInterval(
       () => emitDelta(engine),
@@ -226,36 +216,18 @@ module.exports = function (app) {
     app.debug(`[${plugin.id}] Keepalive repeat started for ${engine.config.path} (${options.keepaliveRepeatSeconds}s interval)`)
   }
 
-  function switchToActiveMode(engine) {
-    if (engine.repeatInterval) {
-      clearInterval(engine.repeatInterval)
-     engine.repeatInterval = null
-    }
-    startActiveMode(engine)
-  }
-
-  function switchToKeepaliveMode(engine) {
-    if (engine.repeatInterval) {
-      clearInterval(engine.repeatInterval)
-      engine.repeatInterval = null
-    }
-    startKeepaliveMode(engine)
-  }
 
   // --------------------
   // Injection control
   // --------------------
   function stopRepeat(engine) {
-    if (engine.repeatInterval) {
-      clearInterval(engine.repeatInterval)
-      engine.repeatInterval = null
-    }
     if (engine.rpmTimeout) {
       clearTimeout(engine.rpmTimeout)
       engine.rpmTimeout = null
     }
     engine.isKeepaliveMode = false
-  }
+  
+}
 
   // --------------------
   // Delta emission
