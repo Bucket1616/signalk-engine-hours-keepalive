@@ -185,7 +185,7 @@ module.exports = function (app) {
   
     // Simplify mode selection
     if (engine.rpmPresent) {
-      engineisKeepaliveMode = false
+      engine.isKeepaliveMode = false
       app.debug(`[${plugin.id}] Active mode for ${engine.config.path}`)
     } else {
       // Only start keepalive if we have an initial value
