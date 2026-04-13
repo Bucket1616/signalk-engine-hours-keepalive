@@ -17,14 +17,10 @@ module.exports = function (app) {
   plugin.schema = {
     type: 'object',
     properties: {
-      null: {
-        type: 'null',
-        title: 'Configure each engine path and engine hours will be persisted on NMEA even with engines off',
-      },
       rpmTimeoutSeconds: {
         type: 'number',
         title: 'RPM timeout - delay before switching to keepalive mode (seconds)',
-        default: 3
+        default: 6
       },
       keepaliveRepeatSeconds: {
         type: 'number',
@@ -73,6 +69,8 @@ module.exports = function (app) {
       app.debug('Discovery only mode enabled; no injection will occur')
       return
     }
+    app.debug('Discovery only mode disabled')
+
 
     ;(options.engines || []).forEach(cfg => {
       const engine = createEngine(cfg)
@@ -101,9 +99,10 @@ module.exports = function (app) {
       config,
       lastRuntime: null,        // changed from lastValue
       rpmTimeout: null,         // changed from timeout
-      isKeepaliveMode: false,   // NEW - tracks which mode we're in
+      isKeepaliveMode: false,   // NEW - tracks which mode we're in 
       rpmPresent: false,         // changed from rpmAlive
-      hasInitialValue: false
+      hasInitialValue: false,    // So we know that no value is present.
+      repeatInterval: null      // timer for when to send next message
     }
   
      // restore persisted value
@@ -128,13 +127,13 @@ module.exports = function (app) {
      .getSelfStream(engine.config.path)
       .onValue(delta => {
         const value = delta.value || delta  // Handle different stream formats
-        handleRuntime(engine, value, delta)
+        handleRuntime(engine, value)
       })
 
     unsubscribes.push(unsubRuntime)
     // RPM corroboration (best-effort)
-    const rpmPath = engine.config.path
-      .replace(/runtime|runHours$/, 'revolutions')
+    const rpmPath = engine.config.path 
+      .replace(/(?:runtime|runhours)$/i, 'revolutions')
 
     const unsubRpm = app.streambundle
       .getSelfStream(rpmPath)
@@ -160,7 +159,7 @@ module.exports = function (app) {
       // If we were in keepalive mode, switch back to active mode
       if (engine.isKeepaliveMode) {
         app.debug(`[${plugin.id}] RPM detected on ${engine.config.path}, switching to active mode`)
-        engine.isKeepaliveMode = false
+        stopRepeat(engine)
       }
     } else if (wasPresent && !engine.rpmPresent) {
       // RPM just stopped - start timeout
@@ -196,21 +195,29 @@ module.exports = function (app) {
   }
 
   
-  function startRpmTimeout(engine) {
+   function startRpmTimeout(engine) {
     if (engine.rpmTimeout) clearTimeout(engine.rpmTimeout)
   
-    engine.rpmTimeout = setTimeout(() => {
+    engine.rpmTimeout = setTimeout ( () => {
       app.debug(`[${plugin.id}] No RPM seen for ${options.rpmTimeoutSeconds}s on ${engine.config.path}, switching to keepalive mode`)
       startKeepaliveMode(engine)
-    }, options.rpmTimeoutSeconds * 1000)
+      },
+      (options.rpmTimeoutSeconds || 6) * 1000
+    )
   }
   
 
   function startKeepaliveMode(engine) {
+  	if (engine.isKeepaliveMode) return;
+
+  	if (engine.repeatInterval) {
+  		clearInterval(engine.repeatInterval)
+  		engine.repeatInterval = null
+  	}
     engine.isKeepaliveMode = true
     engine.repeatInterval = setInterval(
       () => emitDelta(engine),
-      options.keepaliveRepeatSeconds * 1000
+      (options.keepaliveRepeatSeconds || 3) * 1000
     )
     app.setPluginStatus(`Keepalive mode: ${engine.config.path}`)
     app.debug(`[${plugin.id}] Keepalive repeat started for ${engine.config.path} (${options.keepaliveRepeatSeconds}s interval)`)
@@ -225,6 +232,10 @@ module.exports = function (app) {
       clearTimeout(engine.rpmTimeout)
       engine.rpmTimeout = null
     }
+    if (engine.repeatInterval) {
+    	clearInterval(engine.repeatInterval)
+    	engine.repeatInterval = null
+    }
     engine.isKeepaliveMode = false
   
 }
@@ -233,6 +244,7 @@ module.exports = function (app) {
   // Delta emission
   // --------------------
   function emitDelta(engine) {
+  	if (engine.lastRuntime == null) return;
     app.debug(
       `[${plugin.id}] Emitting runtime delta for ${engine.config.path}: ${engine.lastRuntime}`
     )
