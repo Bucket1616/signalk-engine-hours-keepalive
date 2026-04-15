@@ -121,11 +121,11 @@ module.exports = function (app) {
   // Subscriptions
   // --------------------
   function subscribe(engine) {
-    // Runtime subscription - use getSelfBus to check the source
+    // Runtime subscription
     const unsubRuntime = app.streambundle
       .getSelfBus(engine.config.path)
       .onValue(update => {
-        // Prevent infinite loops by ignoring our own re-transmitted messages
+        // Prevent infinite loops
         if (
           update.$source === plugin.id || 
           (update.source && update.source.label === plugin.id)
@@ -138,16 +138,31 @@ module.exports = function (app) {
     unsubscribes.push(unsubRuntime)
 
     // RPM corroboration (best-effort)
-    const rpmPath = engine.config.path
-      .replace(/runtime|runHours$/, 'revolutions')
+    const rpmPath = engine.config.path.replace(/runtime|runHours$/, 'revolutions')
+    
+    // Add a variable to track the RPM timeout
+    let rpmTimeout = null;
 
     const unsubRpm = app.streambundle
       .getSelfStream(rpmPath)
       .onValue(rpm => {
         engine.rpmAlive = typeof rpm === 'number' && rpm > 0
+        
+        // Clear the existing timeout
+        if (rpmTimeout) clearTimeout(rpmTimeout)
+        
+        // If we don't hear an RPM message for 5 seconds, assume the engine is off/dead
+        rpmTimeout = setTimeout(() => {
+          engine.rpmAlive = false
+        }, 5000)
       })
 
     unsubscribes.push(unsubRpm)
+    
+    // Clean up the timeout if the plugin stops
+    unsubscribes.push(() => {
+        if (rpmTimeout) clearTimeout(rpmTimeout)
+    })
   }
 
 
