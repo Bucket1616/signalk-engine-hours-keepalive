@@ -1,6 +1,6 @@
 {
   "name": "signalk-engine-hours-keepalive",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "description": "Repeats last known engine run hours when engines stop transmitting",
   "main": "index.js",
   "keywords": [
