@@ -4,6 +4,7 @@
   "description": "Repeats last known engine run hours when engines stop transmitting",
   "main": "index.js",
   "keywords": [
+    "signalk-plugin",
     "signalk-node-server-plugin",
     "signalk",
     "nmea2000",
