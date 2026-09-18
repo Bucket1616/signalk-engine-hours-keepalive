@@ -3,8 +3,6 @@
   "version": "0.9.0",
   "description": "Repeats last known engine run hours when engines stop transmitting",
   "main": "index.js",
-  "scripts":
-    "test": "node --test test/plugin.test.js"
   "keywords": [
     "signalk-plugin",
     "signalk-node-server-plugin",
